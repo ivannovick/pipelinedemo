@@ -1,4 +1,4 @@
--- Application data: PDFs land here only after the stream-processor reads from RabbitMQ Streams.
+-- Application data: PDFs land here only after the batch consumer reads from RabbitMQ Streams.
 --
 -- local_pc_archive_path: where the archived PDF lives on your machine.
 --   - If you set PDF_HOST_BASE_DIR in .env to the absolute path of ./data/pdfs, this column stores that full path + filename.

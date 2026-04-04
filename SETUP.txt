@@ -64,4 +64,3 @@ Notes
 -----
 - Very large PDFs may require raising RabbitMQ stream / message limits.
 - Airflow metadata remains SQLite under ./airflow-sqlite (PoC).
-- Optional: stream-processor/ folder kept for reference only (not started by default compose).

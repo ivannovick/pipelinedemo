@@ -1,4 +1,8 @@
-"""One-shot: publish a local PDF file to RabbitMQ Stream (same envelope as Airflow DAG)."""
+"""One-shot: publish a local PDF to RabbitMQ Stream (same envelope as gdrive_publish_to_stream).
+
+Run inside the Airflow container (has rstream), e.g.:
+  docker compose exec airflow python /opt/airflow/tools/publish_stream_once.py /opt/airflow/testdata/sample.pdf
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ from rstream import AMQPMessage, Producer
 
 async def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: publish_once.py /path/to/file.pdf", file=sys.stderr)
+        print("Usage: publish_stream_once.py /path/to/file.pdf", file=sys.stderr)
         sys.exit(1)
     path = Path(sys.argv[1])
     if not path.is_file():

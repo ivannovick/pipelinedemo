@@ -1,6 +1,6 @@
 """
 Airflow: Google Drive -> RabbitMQ Stream (binary job envelope).
-Downstream: stream-processor container reads the stream, then parses and writes Postgres + disk.
+Downstream: pdf_stream_batch_consumer reads the stream, then parses and writes Postgres + disk.
 """
 
 from datetime import timedelta

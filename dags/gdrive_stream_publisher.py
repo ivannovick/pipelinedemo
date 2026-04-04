@@ -1,6 +1,6 @@
 """
 Ingest only: read PDFs from Google Drive (dlt) and publish to RabbitMQ Streams.
-Does not parse PDFs or write Postgres/disk — the stream-processor service does that
+Does not parse PDFs or write Postgres/disk — the scheduled pdf_stream_batch_consumer DAG does that
 after it consumes each message.
 """
 
