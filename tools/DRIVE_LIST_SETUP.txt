@@ -1,0 +1,50 @@
+List PDFs in your Google Drive (tools/list_drive_pdfs.py)
+=========================================================
+
+Install (once, on your PC):
+  pip install -r tools/requirements-list-drive.txt
+
+---
+
+A) Personal Google account (OAuth — sign in with your Gmail)
+------------------------------------------------------------
+1. Google Cloud Console: https://console.cloud.google.com/
+   - Create or pick a project.
+   - APIs & Services → Enable APIs → enable "Google Drive API".
+   - APIs & Services → Credentials → Create credentials → OAuth client ID.
+   - Application type: Desktop app → Create → Download JSON (client_secret_....json).
+
+2. OAuth consent screen: add yourself as a test user if the app is in "Testing".
+
+3. Run (from repo root):
+     python tools/list_drive_pdfs.py --oauth path/to/client_secret_....json
+
+   A browser opens; log in with your Google account. A token is saved as tools/token.json
+   (gitignored — do not commit).
+
+4. Optional — only PDFs under one folder (folder id from the Drive URL):
+     python tools/list_drive_pdfs.py --oauth path/to/client_secret.json --folder YOUR_FOLDER_ID
+
+---
+
+B) Service account (same as Airflow/dlt — no browser)
+-----------------------------------------------------
+1. GCP: create service account, JSON key, enable Drive API.
+2. Put key fields in dlt/secrets.toml (see dlt/secrets.toml.example), OR set:
+     set GOOGLE_APPLICATION_CREDENTIALS=C:\path\to\key.json
+3. In Google Drive (your account): share the folder with the service account email
+   (Viewer is enough).
+4. Run:
+     python tools/list_drive_pdfs.py --secrets dlt/secrets.toml
+   or, with env var to JSON key:
+     python tools/list_drive_pdfs.py
+
+5. With a specific folder (folder id):
+     python tools/list_drive_pdfs.py --secrets dlt/secrets.toml --folder FOLDER_ID
+
+---
+
+Airflow / pipeline URL for dlt
+-------------------------------
+Use the same folder id in .env:
+  GDRIVE_BUCKET_URL=gdrive://FOLDER_ID/

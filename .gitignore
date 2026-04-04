@@ -1,0 +1,17 @@
+.env
+dlt/secrets.toml
+airflow-sqlite/
+data/pdfs/*.pdf
+testdata/*.pdf
+tools/token.json
+tools/client_secret*.json
+
+# Python / tooling
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor
+Thumbs.db
+.DS_Store

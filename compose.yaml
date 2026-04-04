@@ -1,0 +1,95 @@
+# Compose Specification (Docker Compose v2+).
+#
+# Architecture (stream-first):
+#   1) airflow DAG gdrive_publish_to_stream — reads Drive, publishes JSON jobs to RabbitMQ Stream only.
+#   2) stream-processor — long-running consumer: after each message is read from the stream,
+#      decodes PDF, extracts text, writes ./data/pdfs, INSERTs Postgres.
+#   postgres — app DB; rabbitmq — broker + streams (5552).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pdfuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pdfpass}
+      POSTGRES_DB: ${POSTGRES_DB:-pdfarchive}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pdfuser -d pdfarchive"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  rabbitmq:
+    build: ./rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "5552:5552"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  stream-processor:
+    build: ./stream-processor
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+      STREAM_HOST: rabbitmq
+      STREAM_PORT: "5552"
+      STREAM_NAME: ${STREAM_NAME:-pdf.jobs}
+      STREAM_CONSUMER_NAME: ${STREAM_CONSUMER_NAME:-pdf-processor}
+      STREAM_READ_OFFSET: ${STREAM_READ_OFFSET:-next}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-pdfuser}:${POSTGRES_PASSWORD:-pdfpass}@postgres:5432/${POSTGRES_DB:-pdfarchive}
+      LOCAL_PDF_STORAGE: /data/pdfs
+      PDF_HOST_BASE_DIR: ${PDF_HOST_BASE_DIR:-}
+    volumes:
+      - ./data/pdfs:/data/pdfs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  airflow:
+    build: ./airflow
+    command: standalone
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/sqlite/airflow.db
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      GDRIVE_BUCKET_URL: ${GDRIVE_BUCKET_URL:-gdrive://SET_FOLDER_IN_ENV/}
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+      STREAM_NAME: ${STREAM_NAME:-pdf.jobs}
+      STREAM_HOST: rabbitmq
+      STREAM_PORT: "5552"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./dlt:/opt/airflow/.dlt
+      - ./airflow-sqlite:/opt/airflow/sqlite
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

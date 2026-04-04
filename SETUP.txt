@@ -1,0 +1,59 @@
+Architecture (stream-first)
+----------------------------
+1) Airflow DAG `gdrive_publish_to_stream` uses dlt to read PDFs from Google Drive and publishes
+   JSON envelopes to a RabbitMQ *stream* (port 5552). It does not parse PDFs or touch Postgres/disk.
+
+2) Service `stream-processor` subscribes to that stream. For each message, processing happens
+   only in the consumer callback after the payload is delivered from the stream: decode PDF bytes,
+   extract text (pypdf), write the file under ./data/pdfs, INSERT into Postgres.
+
+3) Postgres holds extracted_text plus source_stream + stream_offset (idempotency) and paths to files.
+
+Postgres column for your PC archive path
+----------------------------------------
+- local_pc_archive_path (NOT NULL): where the PDF file lives relative to your project, or an absolute path.
+  - Default: "data/pdfs/<stored_file_name>" — resolve as <your repo>/data/pdfs/... on your machine (same as the Compose bind mount).
+  - Optional: set PDF_HOST_BASE_DIR in .env to the absolute path of your data/pdfs folder (e.g. C:\Users\you\...\airbyteapp\data\pdfs); then this column stores the full path including the filename.
+
+Startup order
+-------------
+- Start `stream-processor` before you trigger the DAG the first time if STREAM_READ_OFFSET=next,
+  otherwise messages already in the stream may be skipped. For catch-up after downtime, set
+  STREAM_READ_OFFSET=first once (then back to next) or use a new STREAM_CONSUMER_NAME.
+
+Volumes
+-------
+- ./data/pdfs: PDF binaries written by stream-processor (bind mount).
+- postgres-data: Postgres data.
+
+Services (containers)
+---------------------
+- postgres, rabbitmq, stream-processor, airflow (four containers).
+
+List PDFs from your Google account (local PC)
+----------------------------------------------
+See tools/DRIVE_LIST_SETUP.txt — script tools/list_drive_pdfs.py supports OAuth (personal Gmail)
+or the same service account as dlt/secrets.toml.
+
+Setup
+-----
+1. dlt/secrets.toml from secrets.toml.example (Drive API + share folder with service account).
+2. .env from .env.example.
+3. If you already initialized Postgres with an older schema, remove the postgres-data volume,
+   or run postgres/migrations/001_local_pc_archive_path.sql, or recreate the table from 01-schema.sql.
+4. docker compose up --build
+5. Enable DAG `gdrive_publish_to_stream` and trigger a run after stream-processor is running.
+
+Message format (stream body)
+----------------------------
+Default from publisher: JSON UTF-8 with pdf_base64, original_file_name, source_file_url.
+stream-processor also accepts raw PDF bytes (body starts with %PDF) for other producers.
+
+Query
+-----
+  docker compose exec postgres psql -U pdfuser -d pdfarchive -c "SELECT source_stream, stream_offset, original_file_name, left(extracted_text,60) FROM pdf_documents;"
+
+Notes
+-----
+- Very large PDFs may require raising RabbitMQ stream / message limits.
+- Airflow metadata remains SQLite under ./airflow-sqlite (PoC).

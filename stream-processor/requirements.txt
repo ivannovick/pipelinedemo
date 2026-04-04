@@ -1,0 +1,3 @@
+rstream==1.0.0
+pypdf==5.1.0
+psycopg[binary]==3.2.4

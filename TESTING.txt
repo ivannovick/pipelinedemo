@@ -1,0 +1,42 @@
+Local test (no Google Drive)
+----------------------------
+1. docker compose up -d --build
+2. Wait until stream-processor logs show "Subscribed to stream" (ignore one-time ConnectionRefused on port 5552 while RabbitMQ finishes starting).
+3. Publish the sample PDF (same envelope format as the Airflow DAG):
+
+   docker compose run --rm --no-deps ^
+     -v "%CD%/testdata:/data/test:ro" ^
+     --entrypoint python stream-processor ^
+     /app/publish_once.py /data/test/sample.pdf
+
+   PowerShell (repo root):
+   docker compose run --rm --no-deps `
+     -v "${PWD}/testdata:/data/test:ro" `
+     --entrypoint python stream-processor `
+     /app/publish_once.py /data/test/sample.pdf
+
+4. Confirm:
+   - docker compose logs stream-processor --tail 20
+   - docker compose exec postgres psql -U pdfuser -d pdfarchive -c "SELECT * FROM pdf_documents;"
+   - A new .pdf under ./data/pdfs
+
+Regenerate testdata/sample.pdf (optional)
+-----------------------------------------
+  docker run --rm -v "%CD%/tools:/w" -v "%CD%/testdata:/out" python:3.12-slim sh -c "pip install -q fpdf2 && python /w/gen_sample_pdf.py /out/sample.pdf"
+
+Test with one PDF on Google Drive
+-----------------------------------
+1. Google Cloud: enable Drive API, create a service account, download JSON key.
+2. Copy dlt/secrets.toml.example to dlt/secrets.toml and paste client_email, private_key, project_id (see dlt filesystem docs for exact TOML shape).
+3. In Drive, create or pick a folder and share it with the service account email (Viewer is enough).
+4. Upload exactly one PDF into that folder (or ensure only one matches **/*.pdf).
+5. Set folder URL in .env:
+     GDRIVE_BUCKET_URL=gdrive://<FOLDER_ID>/
+   The folder ID is the long id in the Drive URL when you open the folder in a browser.
+6. docker compose up -d --build
+7. Open Airflow http://localhost:8080 — get admin password from:
+     docker compose logs airflow 2>&1 | findstr /i password
+8. Enable DAG "gdrive_publish_to_stream" and trigger it once.
+9. Watch stream-processor logs; check Postgres and ./data/pdfs as above.
+
+If the DAG fails on credentials, fix dlt/secrets.toml paths and bucket URL until dlt can list the folder.
