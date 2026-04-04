@@ -1,0 +1,2 @@
+The stream-processor Docker service was removed from compose.yaml.
+Use Airflow DAG pdf_stream_batch_consumer instead. This directory is optional reference only.

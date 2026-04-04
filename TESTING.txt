@@ -1,24 +1,19 @@
 Local test (no Google Drive)
 ----------------------------
 1. docker compose up -d --build
-2. Wait until stream-processor logs show "Subscribed to stream" (ignore one-time ConnectionRefused on port 5552 while RabbitMQ finishes starting).
-3. Publish the sample PDF (same envelope format as the Airflow DAG):
+2. Wait until RabbitMQ and Airflow are healthy (Airflow logs show webserver/scheduler up).
+3. Enable DAG `pdf_stream_batch_consumer` in the UI (or it will run on schedule every minute).
+4. Publish the sample PDF (same envelope format as the Airflow DAG), using the Airflow container:
 
-   docker compose run --rm --no-deps ^
-     -v "%CD%/testdata:/data/test:ro" ^
-     --entrypoint python stream-processor ^
-     /app/publish_once.py /data/test/sample.pdf
+   docker compose exec airflow python /opt/airflow/tools/publish_stream_once.py /opt/airflow/testdata/sample.pdf
 
-   PowerShell (repo root):
-   docker compose run --rm --no-deps `
-     -v "${PWD}/testdata:/data/test:ro" `
-     --entrypoint python stream-processor `
-     /app/publish_once.py /data/test/sample.pdf
-
-4. Confirm:
-   - docker compose logs stream-processor --tail 20
+5. Within about one minute (next batch run), confirm:
+   - docker compose logs airflow --tail 80   (look for pdf_stream_batch_consumer / "Processed stream")
    - docker compose exec postgres psql -U pdfuser -d pdfarchive -c "SELECT * FROM pdf_documents;"
    - A new .pdf under ./data/pdfs
+
+   To run the consumer immediately instead of waiting for the schedule, trigger DAG
+   `pdf_stream_batch_consumer` once from the Airflow UI.
 
 Regenerate testdata/sample.pdf (optional)
 -----------------------------------------
@@ -37,7 +32,8 @@ Test with one PDF on Google Drive
 6. docker compose up -d --build
 7. Open Airflow http://localhost:8080 — get admin password from:
      docker compose logs airflow 2>&1 | findstr /i password
-8. Enable DAG "gdrive_publish_to_stream" and trigger it once.
-9. Watch stream-processor logs; check Postgres and ./data/pdfs as above.
+8. Enable DAG `pdf_stream_batch_consumer` and DAG `gdrive_publish_to_stream`; trigger
+   `gdrive_publish_to_stream` once (or wait for schedule).
+9. After up to ~1 minute, check Postgres and ./data/pdfs as above (or trigger `pdf_stream_batch_consumer`).
 
 If the DAG fails on credentials, fix dlt/service_account.json (or secrets.toml) and bucket URL until dlt can list the folder.

@@ -3,9 +3,10 @@ Architecture (stream-first)
 1) Airflow DAG `gdrive_publish_to_stream` uses dlt to read PDFs from Google Drive and publishes
    JSON envelopes to a RabbitMQ *stream* (port 5552). It does not parse PDFs or touch Postgres/disk.
 
-2) Service `stream-processor` subscribes to that stream. For each message, processing happens
-   only in the consumer callback after the payload is delivered from the stream: decode PDF bytes,
-   extract text (pypdf), write the file under ./data/pdfs, INSERT into Postgres.
+2) Airflow DAG `pdf_stream_batch_consumer` runs on a schedule (default: every 1 minute). Each run
+   subscribes to the stream for a bounded time, processes messages in the callback (decode PDF,
+   pypdf extract, write ./data/pdfs, INSERT Postgres), and stores consumer offsets on the broker.
+   This replaces the old long-running `stream-processor` container.
 
 3) Postgres holds extracted_text plus source_stream + stream_offset (idempotency) and paths to files.
 
@@ -15,25 +16,29 @@ Postgres column for your PC archive path
   - Default: "data/pdfs/<stored_file_name>" — resolve as <your repo>/data/pdfs/... on your machine (same as the Compose bind mount).
   - Optional: set PDF_HOST_BASE_DIR in .env to the absolute path of your data/pdfs folder (e.g. C:\Users\you\...\airbyteapp\data\pdfs); then this column stores the full path including the filename.
 
-Startup order
--------------
-- Start `stream-processor` before you trigger the DAG the first time if STREAM_READ_OFFSET=next,
-  otherwise messages already in the stream may be skipped. For catch-up after downtime, set
-  STREAM_READ_OFFSET=first once (then back to next) or use a new STREAM_CONSUMER_NAME.
+Startup / latency
+-----------------
+- Three containers: postgres, rabbitmq, airflow.
+- Ingest from Drive can run anytime; PDFs are usually processed within about one schedule interval
+  (default 1 minute) plus STREAM_BATCH_POLL_SECONDS per batch run. Tune STREAM_BATCH_POLL_SECONDS
+  and STREAM_BATCH_MAX_MESSAGES in .env if runs overlap or time out.
+- For catch-up after long downtime, set STREAM_READ_OFFSET=first once (then back to next) or use a
+  new STREAM_CONSUMER_NAME.
 
 Volumes
 -------
-- ./data/pdfs: PDF binaries written by stream-processor (bind mount).
+- ./data/pdfs: PDF binaries written by the batch consumer (bind mount into Airflow).
 - postgres-data: Postgres data.
+- ./tools, ./testdata: read-only into Airflow for local publish helper (see TESTING.txt).
 
 Services (containers)
 ---------------------
-- postgres, rabbitmq, stream-processor, airflow (four containers).
+- postgres, rabbitmq, airflow.
 
 List PDFs from your Google account (local PC)
 ----------------------------------------------
 See tools/DRIVE_LIST_SETUP.txt — script tools/list_drive_pdfs.py supports OAuth (personal Gmail)
-or the same service account as dlt/secrets.toml.
+or the same service account as dlt/service_account.json / dlt/secrets.toml.
 
 Setup
 -----
@@ -44,12 +49,12 @@ Setup
 3. If you already initialized Postgres with an older schema, remove the postgres-data volume,
    or run postgres/migrations/001_local_pc_archive_path.sql, or recreate the table from 01-schema.sql.
 4. docker compose up --build
-5. Enable DAG `gdrive_publish_to_stream` and trigger a run after stream-processor is running.
+5. Enable DAGs `pdf_stream_batch_consumer` (scheduled) and `gdrive_publish_to_stream` (manual/scheduled).
 
 Message format (stream body)
 ----------------------------
 Default from publisher: JSON UTF-8 with pdf_base64, original_file_name, source_file_url.
-stream-processor also accepts raw PDF bytes (body starts with %PDF) for other producers.
+The batch consumer also accepts raw PDF bytes (body starts with %PDF) for other producers.
 
 Query
 -----
@@ -59,3 +64,4 @@ Notes
 -----
 - Very large PDFs may require raising RabbitMQ stream / message limits.
 - Airflow metadata remains SQLite under ./airflow-sqlite (PoC).
+- Optional: stream-processor/ folder kept for reference only (not started by default compose).

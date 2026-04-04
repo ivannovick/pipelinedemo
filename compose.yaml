@@ -2,8 +2,7 @@
 #
 # Architecture (stream-first):
 #   1) airflow DAG gdrive_publish_to_stream — reads Drive, publishes JSON jobs to RabbitMQ Stream only.
-#   2) stream-processor — long-running consumer: after each message is read from the stream,
-#      decodes PDF, extracts text, writes ./data/pdfs, INSERTs Postgres.
+#   2) airflow DAG pdf_stream_batch_consumer — every minute, consumes stream batch → ./data/pdfs + Postgres.
 #   postgres — app DB; rabbitmq — broker + streams (5552).
 
 services:
@@ -43,30 +42,6 @@ services:
       retries: 5
       start_period: 40s
 
-  stream-processor:
-    build: ./stream-processor
-    environment:
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
-      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
-      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
-      STREAM_HOST: rabbitmq
-      STREAM_PORT: "5552"
-      STREAM_NAME: ${STREAM_NAME:-pdf.jobs}
-      STREAM_CONSUMER_NAME: ${STREAM_CONSUMER_NAME:-pdf-processor}
-      STREAM_READ_OFFSET: ${STREAM_READ_OFFSET:-next}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-pdfuser}:${POSTGRES_PASSWORD:-pdfpass}@postgres:5432/${POSTGRES_DB:-pdfarchive}
-      LOCAL_PDF_STORAGE: /data/pdfs
-      PDF_HOST_BASE_DIR: ${PDF_HOST_BASE_DIR:-}
-    volumes:
-      - ./data/pdfs:/data/pdfs
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    restart: unless-stopped
-
   airflow:
     build: ./airflow
     command: standalone
@@ -81,13 +56,25 @@ services:
       STREAM_NAME: ${STREAM_NAME:-pdf.jobs}
       STREAM_HOST: rabbitmq
       STREAM_PORT: "5552"
+      STREAM_CONSUMER_NAME: ${STREAM_CONSUMER_NAME:-pdf-processor}
+      STREAM_READ_OFFSET: ${STREAM_READ_OFFSET:-next}
+      STREAM_BATCH_POLL_SECONDS: ${STREAM_BATCH_POLL_SECONDS:-50}
+      STREAM_BATCH_MAX_MESSAGES: ${STREAM_BATCH_MAX_MESSAGES:-200}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-pdfuser}:${POSTGRES_PASSWORD:-pdfpass}@postgres:5432/${POSTGRES_DB:-pdfarchive}
+      LOCAL_PDF_STORAGE: /data/pdfs
+      PDF_HOST_BASE_DIR: ${PDF_HOST_BASE_DIR:-}
     ports:
       - "8080:8080"
     volumes:
       - ./dags:/opt/airflow/dags
       - ./dlt:/opt/airflow/.dlt
       - ./airflow-sqlite:/opt/airflow/sqlite
+      - ./data/pdfs:/data/pdfs
+      - ./tools:/opt/airflow/tools:ro
+      - ./testdata:/opt/airflow/testdata:ro
     depends_on:
+      postgres:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
 
