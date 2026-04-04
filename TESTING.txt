@@ -27,7 +27,8 @@ Regenerate testdata/sample.pdf (optional)
 Test with one PDF on Google Drive
 -----------------------------------
 1. Google Cloud: enable Drive API, create a service account, download JSON key.
-2. Copy dlt/secrets.toml.example to dlt/secrets.toml and paste client_email, private_key, project_id (see dlt filesystem docs for exact TOML shape).
+2. Put the GCP service account JSON at dlt/service_account.json, or copy dlt/secrets.toml.example
+   to dlt/secrets.toml and fill [sources.filesystem.credentials].
 3. In Drive, create or pick a folder and share it with the service account email (Viewer is enough).
 4. Upload exactly one PDF into that folder (or ensure only one matches **/*.pdf).
 5. Set folder URL in .env:
@@ -39,4 +40,4 @@ Test with one PDF on Google Drive
 8. Enable DAG "gdrive_publish_to_stream" and trigger it once.
 9. Watch stream-processor logs; check Postgres and ./data/pdfs as above.
 
-If the DAG fails on credentials, fix dlt/secrets.toml paths and bucket URL until dlt can list the folder.
+If the DAG fails on credentials, fix dlt/service_account.json (or secrets.toml) and bucket URL until dlt can list the folder.

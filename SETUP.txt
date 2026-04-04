@@ -37,7 +37,9 @@ or the same service account as dlt/secrets.toml.
 
 Setup
 -----
-1. dlt/secrets.toml from secrets.toml.example (Drive API + share folder with service account).
+1. Google Drive: put your GCP service account JSON at dlt/service_account.json (same file
+   as "Create key" in Cloud Console), OR copy secrets.toml.example to dlt/secrets.toml
+   and fill [sources.filesystem.credentials]. Share the Drive folder with the SA email.
 2. .env from .env.example.
 3. If you already initialized Postgres with an older schema, remove the postgres-data volume,
    or run postgres/migrations/001_local_pc_archive_path.sql, or recreate the table from 01-schema.sql.

@@ -11,11 +11,43 @@ import base64
 import json
 import logging
 import os
+from pathlib import Path
 
+from dlt.common.configuration.specs.gcp_credentials import GcpServiceAccountCredentials
 from dlt.sources.filesystem import filesystem
 from rstream import AMQPMessage, Producer
 
 log = logging.getLogger(__name__)
+
+# In Docker, ./dlt is mounted at /opt/airflow/.dlt
+_DEFAULT_SA_JSON = Path("/opt/airflow/.dlt/service_account.json")
+
+
+def _credentials_from_service_account_json(path: Path) -> GcpServiceAccountCredentials:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("type") != "service_account":
+        raise ValueError(f"{path}: expected type service_account")
+    creds = GcpServiceAccountCredentials()
+    creds["client_email"] = data["client_email"]
+    creds["private_key"] = data["private_key"]
+    creds["project_id"] = data["project_id"]
+    return creds
+
+
+def _load_gdrive_credentials() -> GcpServiceAccountCredentials | None:
+    paths: list[Path] = []
+    env = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if env:
+        paths.append(Path(env))
+    paths.append(_DEFAULT_SA_JSON)
+    for path in paths:
+        try:
+            if path.is_file():
+                log.info("Using Google credentials from %s", path)
+                return _credentials_from_service_account_json(path)
+        except OSError:
+            continue
+    return None
 
 
 async def publish_pdfs_to_stream() -> None:
@@ -37,7 +69,19 @@ async def publish_pdfs_to_stream() -> None:
     await producer.start()
     await producer.create_stream(stream_name, exists_ok=True)
 
-    src = filesystem(bucket_url=bucket, file_glob="**/*.pdf")
+    gcp_creds = _load_gdrive_credentials()
+    if gcp_creds is not None:
+        src = filesystem(
+            bucket_url=bucket,
+            file_glob="**/*.pdf",
+            credentials=gcp_creds,
+        )
+    else:
+        log.info(
+            "No service_account.json or GOOGLE_APPLICATION_CREDENTIALS; "
+            "using dlt secrets.toml [sources.filesystem.credentials]"
+        )
+        src = filesystem(bucket_url=bucket, file_glob="**/*.pdf")
     n = 0
     try:
         for item in src:

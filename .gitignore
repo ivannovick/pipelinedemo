@@ -1,10 +1,44 @@
+# --- Secrets & local overrides (never commit real credentials or PII) ---
 .env
+# Allow committing the template only
+!.env.example
+# Common env copies / IDE env files
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.backup
+
+# dlt: mounted as /opt/airflow/.dlt — TOML secrets + any JSON key file
 dlt/secrets.toml
-airflow-sqlite/
-data/pdfs/*.pdf
-testdata/*.pdf
+dlt/*.json
+
+# OAuth / Drive list tooling
 tools/token.json
 tools/client_secret*.json
+tools/credentials.json
+
+# Keys / cred dumps often dropped in repo root by mistake
+/credentials.json
+/service-account*.json
+/google-sa*.json
+/*.pem
+/*.p12
+
+# Docker Compose local overrides (passwords, bind mounts)
+docker-compose.override.yml
+docker-compose.override.yaml
+compose.override.yaml
+
+# dlt CLI may create a hidden config dir in project root (distinct from ./dlt/)
+.dlt/
+
+# Airflow local SQLite + metadata (may include connection strings)
+airflow-sqlite/
+
+# PDFs may contain personal or confidential content
+data/pdfs/*.pdf
+testdata/*.pdf
 
 # Python / tooling
 __pycache__/
