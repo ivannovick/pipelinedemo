@@ -29,7 +29,7 @@
         <div class="page-section-intro">
           <h1 cds-text="display">PDF ingestion pipeline</h1>
           <p class="subtitle">
-            Google Drive → Airflow → RabbitMQ Streams → Postgres &amp; disk
+            Google Drive → Airflow → RabbitMQ Streams → Postgres (Bronze) → dbt (Silver) &amp; disk
           </p>
         </div>
         <cds-button id="theme-toggle" action="outline">Dark mode</cds-button>
@@ -47,8 +47,9 @@
             Pipeline flow
           </h2>
           <p class="page-section-desc" cds-text="secondary">
-            End-to-end path from Drive through the stream to Postgres and disk. Scroll down for
-            DAGs, data tables, and search.
+            From Drive through the stream into Bronze (<code>public.pdf_documents</code>) and disk,
+            then dbt builds Silver in <code>dbt_analytics</code>. Scroll down for DAG tables and
+            search.
           </p>
         </header>
 
@@ -160,6 +161,37 @@
               </cds-card>
             </div>
           </div>
+
+          <p class="pipeline-arrow pipeline-arrow--between-tiers" aria-hidden="true">↓</p>
+
+          <p class="pipeline-tier-label">Transform — dbt Silver (reads Bronze, writes marts)</p>
+          <div class="pipeline-tier">
+            <div class="step-wrap">
+              <cds-card class="step-card" id="step-dbt-dag" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="success">Airflow DAG</cds-badge>
+                  <h4>dbt_run_pdf_archive</h4>
+                  <p class="meta" cds-text="secondary">
+                    Scheduled <code>dbt run</code> against <code>/opt/dbt/pdf_archive</code>; builds
+                    staging views and mart tables from <code>public.pdf_documents</code>.
+                  </p>
+                </div>
+              </cds-card>
+            </div>
+            <p class="pipeline-arrow" aria-hidden="true">↓</p>
+            <div class="step-wrap">
+              <cds-card class="step-card" id="step-silver-layer" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="info">Silver</cds-badge>
+                  <h4>Schema <code>dbt_analytics</code></h4>
+                  <p class="meta" cds-text="secondary">
+                    e.g. <code>stg_pdf_documents</code>, <code>pdf_documents_enriched</code>,
+                    <code>pdf_documents_fts</code> (full-text helper + GIN).
+                  </p>
+                </div>
+              </cds-card>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -210,14 +242,90 @@
 
       <hr class="section-rule" />
 
-      <!-- Section 3: Bronze -->
+      <!-- Section 3: RabbitMQ stream metrics -->
+      <section class="page-section" id="section-stream" aria-labelledby="heading-stream">
+        <header class="page-section-header">
+          <p class="page-section-kicker">Section 3</p>
+          <h2 id="heading-stream" class="page-section-title" cds-text="section">
+            RabbitMQ stream backlog
+          </h2>
+          <p class="page-section-desc" cds-text="secondary">
+            Stream name is the RabbitMQ <strong>queue</strong> name (here
+            <code id="stream-name-label">pdf.jobs</code> on vhost
+            <code id="stream-vhost-label">/</code>); apps publish/consume it over stream port
+            <strong>5552</strong>. The management API reports message <em>counts</em> reliably; for
+            <code>x-queue-type: stream</code> it usually does <em>not</em> include payload
+            <code>message_bytes</code>, so we also show segment count and broker RAM for the queue
+            process.
+          </p>
+          <p id="rabbitmq-ui-wrap" class="dag-hint" cds-text="secondary" hidden></p>
+        </header>
+        <div class="stream-actions">
+          <cds-button id="refresh-stream-metrics" action="outline">Refresh stream metrics</cds-button>
+        </div>
+        <p id="stream-metrics-error" class="docs-error" role="alert" hidden></p>
+        <div id="stream-metrics-loading" class="stream-metrics-loading" hidden>Loading metrics…</div>
+        <div id="stream-metrics-grid" class="metrics-grid" hidden></div>
+        <div id="stream-messages-viz" class="stream-bytes-viz" hidden>
+          <p class="stream-bytes-viz__label" cds-text="secondary">Messages retained in stream</p>
+          <div class="stream-bytes-viz__track">
+            <div id="stream-messages-viz-bar" class="stream-bytes-viz__bar stream-bytes-viz__bar--messages" style="width: 0%"></div>
+          </div>
+          <p id="stream-messages-viz-caption" class="stream-bytes-viz__caption" cds-text="secondary"></p>
+        </div>
+        <div id="stream-bytes-viz" class="stream-bytes-viz" hidden>
+          <p class="stream-bytes-viz__label" cds-text="secondary">Payload bytes (<code>message_bytes</code> from API)</p>
+          <div class="stream-bytes-viz__track">
+            <div id="stream-bytes-viz-bar" class="stream-bytes-viz__bar" style="width: 0%"></div>
+          </div>
+          <p id="stream-bytes-viz-caption" class="stream-bytes-viz__caption" cds-text="secondary"></p>
+        </div>
+        <p id="stream-payload-note" class="stream-payload-note" cds-text="secondary" hidden></p>
+        <div id="stream-consumers-wrap" class="table-scroll" hidden>
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>consumer_tag</th>
+                <th>channel</th>
+              </tr>
+            </thead>
+            <tbody id="stream-consumers-tbody"></tbody>
+          </table>
+        </div>
+        <div id="stream-clear-panel" class="stream-clear-panel" hidden>
+          <p class="page-section-desc" cds-text="secondary">
+            <strong>Destructive:</strong> deletes the stream queue and all messages. The next publish
+            recreates it. Set <code>WORKFLOW_VIZ_STREAM_RESET_SECRET</code> in Compose and enter it
+            below.
+          </p>
+          <form id="stream-clear-form" class="search-form">
+            <div class="search-field">
+              <label for="stream-clear-secret">Reset secret</label>
+              <input
+                type="password"
+                id="stream-clear-secret"
+                name="secret"
+                autocomplete="off"
+              />
+            </div>
+            <cds-button type="submit" id="stream-clear-submit" action="outline">
+              Clear stream queue
+            </cds-button>
+          </form>
+          <p id="stream-clear-result" class="search-meta" cds-text="secondary" hidden></p>
+        </div>
+      </section>
+
+      <hr class="section-rule" />
+
+      <!-- Section 4: Bronze -->
       <section
         class="page-section page-section--bronze"
         id="section-bronze"
         aria-labelledby="heading-bronze"
       >
         <header class="page-section-header">
-          <p class="page-section-kicker">Section 3 — Bronze</p>
+          <p class="page-section-kicker">Section 4 — Bronze</p>
           <h2 id="heading-bronze" class="page-section-title" cds-text="section">
             Original landing table
           </h2>
@@ -244,14 +352,14 @@
 
       <hr class="section-rule" />
 
-      <!-- Section 4: Silver -->
+      <!-- Section 5: Silver -->
       <section
         class="page-section page-section--silver"
         id="section-silver"
         aria-labelledby="heading-silver"
       >
         <header class="page-section-header">
-          <p class="page-section-kicker">Section 4 — Silver</p>
+          <p class="page-section-kicker">Section 5 — Silver</p>
           <h2 id="heading-silver" class="page-section-title" cds-text="section">
             dbt-transformed tables &amp; views
           </h2>
@@ -298,10 +406,10 @@
 
       <hr class="section-rule" />
 
-      <!-- Section 5: Search -->
+      <!-- Section 6: Search -->
       <section class="page-section" id="section-search" aria-labelledby="heading-search">
         <header class="page-section-header">
-          <p class="page-section-kicker">Section 5</p>
+          <p class="page-section-kicker">Section 6</p>
           <h2 id="heading-search" class="page-section-title" cds-text="section">Search</h2>
           <p class="page-section-desc search-help" cds-text="secondary">
             Uses Postgres full-text search when the <code>pdf_documents_fts</code> mart exists;

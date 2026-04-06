@@ -11,6 +11,8 @@ const STEPS = [
   "step-processing-lib",
   "step-postgres",
   "step-disk",
+  "step-dbt-dag",
+  "step-silver-layer",
 ];
 
 const SILVER_MAP = [
@@ -18,6 +20,10 @@ const SILVER_MAP = [
   { key: "pdf_documents_enriched", slug: "enriched", kind: "table" },
   { key: "pdf_documents_fts", slug: "fts", kind: "table" },
 ];
+
+/** Matches server default when env is blank or /api/config fails. */
+const DEFAULT_DAG_SOURCE_BASE =
+  "https://github.com/ivannovick/pipelinedemo/blob/main/dags";
 
 const DAGS = [
   {
@@ -48,7 +54,32 @@ const MODULES = [
   },
 ];
 
-let appConfig = { dag_source_base: "", airflow_ui_url: "" };
+let appConfig = {
+  dag_source_base: DEFAULT_DAG_SOURCE_BASE,
+  airflow_ui_url: "",
+  rabbitmq_ui_url: "",
+  stream_clear_enabled: false,
+  stream_name: "pdf.jobs",
+  rabbitmq_vhost: "/",
+};
+
+const STREAM_BYTES_BAR_CAP = 50 * 1024 * 1024;
+/** Bar full at this many messages (visual scale only). */
+const STREAM_MESSAGES_BAR_CAP = 50;
+
+function formatBytes(n) {
+  if (n == null || Number.isNaN(n)) return "—";
+  const x = Number(n);
+  if (x === 0) return "0 B";
+  const u = ["B", "KiB", "MiB", "GiB"];
+  let i = 0;
+  let v = x;
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+}
 
 function setActive(id) {
   STEPS.forEach((sid) => {
@@ -127,7 +158,8 @@ function sourceLinkCell(base, filename) {
   a.href = `${base.replace(/\/$/, "")}/${filename}`;
   a.target = "_blank";
   a.rel = "noopener noreferrer";
-  a.textContent = "View source";
+  a.textContent = "Open";
+  a.title = a.href;
   a.setAttribute("cds-text", "link");
   td.appendChild(a);
   return td;
@@ -145,14 +177,41 @@ async function loadConfig() {
     if (r.ok) {
       const j = await r.json();
       appConfig = {
-        dag_source_base: (j.dag_source_base || "").replace(/\/$/, ""),
+        dag_source_base: (
+          String(j.dag_source_base ?? "").trim() || DEFAULT_DAG_SOURCE_BASE
+        ).replace(/\/$/, ""),
         airflow_ui_url: (j.airflow_ui_url || "").replace(/\/$/, ""),
+        rabbitmq_ui_url: (j.rabbitmq_ui_url || "").replace(/\/$/, ""),
+        stream_clear_enabled: Boolean(j.stream_clear_enabled),
+        stream_name: j.stream_name || "pdf.jobs",
+        rabbitmq_vhost: j.rabbitmq_vhost != null ? String(j.rabbitmq_vhost) : "/",
       };
     }
   } catch (_) {
     /* keep defaults */
   }
   renderDagSection();
+  applyStreamSectionConfig();
+}
+
+function applyStreamSectionConfig() {
+  const rmWrap = document.getElementById("rabbitmq-ui-wrap");
+  if (rmWrap) {
+    if (appConfig.rabbitmq_ui_url) {
+      rmWrap.hidden = false;
+      const u = escapeHtml(appConfig.rabbitmq_ui_url);
+      rmWrap.innerHTML = `RabbitMQ management UI: <a href="${u}" target="_blank" rel="noopener">${u}</a> (queues → stream <code>${escapeHtml(appConfig.stream_name)}</code>)`;
+    } else {
+      rmWrap.hidden = true;
+      rmWrap.textContent = "";
+    }
+  }
+  const nameEl = document.getElementById("stream-name-label");
+  if (nameEl) nameEl.textContent = appConfig.stream_name;
+  const vhostEl = document.getElementById("stream-vhost-label");
+  if (vhostEl) vhostEl.textContent = appConfig.rabbitmq_vhost || "/";
+  const clearPanel = document.getElementById("stream-clear-panel");
+  if (clearPanel) clearPanel.hidden = !appConfig.stream_clear_enabled;
 }
 
 function renderDagSection() {
@@ -468,7 +527,195 @@ async function loadSilver() {
 }
 
 async function loadAllData() {
-  await Promise.all([loadBronze(), loadSilver()]);
+  await Promise.all([loadBronze(), loadSilver(), loadStreamMetrics()]);
+}
+
+async function loadStreamMetrics() {
+  const errEl = document.getElementById("stream-metrics-error");
+  const loading = document.getElementById("stream-metrics-loading");
+  const grid = document.getElementById("stream-metrics-grid");
+  const vizBytes = document.getElementById("stream-bytes-viz");
+  const barBytes = document.getElementById("stream-bytes-viz-bar");
+  const capBytes = document.getElementById("stream-bytes-viz-caption");
+  const vizMsgs = document.getElementById("stream-messages-viz");
+  const barMsgs = document.getElementById("stream-messages-viz-bar");
+  const capMsgs = document.getElementById("stream-messages-viz-caption");
+  const payloadNote = document.getElementById("stream-payload-note");
+  const consWrap = document.getElementById("stream-consumers-wrap");
+  const consTbody = document.getElementById("stream-consumers-tbody");
+
+  if (!grid || !loading) return;
+
+  if (errEl) {
+    errEl.hidden = true;
+    errEl.textContent = "";
+  }
+  if (payloadNote) {
+    payloadNote.hidden = true;
+    payloadNote.textContent = "";
+  }
+  loading.hidden = false;
+  grid.hidden = true;
+  if (vizBytes) vizBytes.hidden = true;
+  if (vizMsgs) vizMsgs.hidden = true;
+  if (consWrap) consWrap.hidden = true;
+  grid.replaceChildren();
+
+  try {
+    const res = await fetch("/api/stream/metrics");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const d = data.detail;
+      throw new Error(typeof d === "string" ? d : res.statusText);
+    }
+
+    loading.hidden = true;
+    grid.hidden = false;
+
+    const nameLabel = document.getElementById("stream-name-label");
+    const vhostLabel = document.getElementById("stream-vhost-label");
+    if (nameLabel && data.queue_name) nameLabel.textContent = data.queue_name;
+    if (vhostLabel && data.vhost != null && data.vhost !== "") vhostLabel.textContent = data.vhost;
+
+    if (data.error) {
+      if (errEl) {
+        errEl.textContent = data.error;
+        errEl.hidden = false;
+      }
+    }
+
+    const limitation = Boolean(data.stream_payload_bytes_not_in_management_api);
+    const bytesReported = Number(data.message_bytes) || 0;
+    const byteTileVal = limitation
+      ? "not in API (streams)"
+      : formatBytes(data.message_bytes);
+
+    const tiles = [
+      ["Stream / queue name", data.queue_name != null ? String(data.queue_name) : "—"],
+      ["Virtual host", data.vhost != null ? String(data.vhost) : "—"],
+      ["Queue exists", data.exists ? "yes" : "no"],
+      ["Queue type", data.queue_type != null ? String(data.queue_type) : "—"],
+      ["Segments", data.segments != null ? String(data.segments) : "—"],
+      ["Broker RAM (queue)", data.memory_bytes != null ? formatBytes(data.memory_bytes) : "—"],
+      ["Messages (total)", data.messages != null ? String(data.messages) : "—"],
+      ["Messages ready", data.messages_ready != null ? String(data.messages_ready) : "—"],
+      ["Payload bytes (API)", byteTileVal],
+      ["Consumers", data.consumers != null ? String(data.consumers) : "—"],
+      ["State", data.state != null ? String(data.state) : "—"],
+    ];
+
+    for (const [label, val] of tiles) {
+      const card = document.createElement("div");
+      card.className = "metric-card";
+      const lb = document.createElement("p");
+      lb.className = "metric-card__label";
+      lb.textContent = label;
+      const vl = document.createElement("p");
+      vl.className = "metric-card__value";
+      vl.textContent = val;
+      card.appendChild(lb);
+      card.appendChild(vl);
+      grid.appendChild(card);
+    }
+
+    const msgs = Number(data.messages) || 0;
+    if (vizMsgs && barMsgs && capMsgs) {
+      vizMsgs.hidden = false;
+      const pctM = Math.min(100, (msgs / STREAM_MESSAGES_BAR_CAP) * 100);
+      barMsgs.style.width = `${pctM}%`;
+      capMsgs.textContent = `${msgs} message(s) — bar scale max ${STREAM_MESSAGES_BAR_CAP} messages (visual only; not disk size).`;
+    }
+
+    if (vizBytes && barBytes && capBytes) {
+      vizBytes.hidden = false;
+      if (limitation || bytesReported === 0) {
+        barBytes.style.width = "0%";
+        capBytes.textContent = limitation
+          ? "RabbitMQ does not include payload message_bytes for stream queues in GET /api/queues — counts above are accurate; disk size is not exposed here."
+          : `${formatBytes(bytesReported)} — bar scale max ${formatBytes(STREAM_BYTES_BAR_CAP)}.`;
+      } else {
+        const pct = Math.min(100, (bytesReported / STREAM_BYTES_BAR_CAP) * 100);
+        barBytes.style.width = `${pct}%`;
+        capBytes.textContent = `${formatBytes(bytesReported)} — bar scale max ${formatBytes(STREAM_BYTES_BAR_CAP)} (visual only).`;
+      }
+    }
+
+    if (payloadNote && limitation) {
+      payloadNote.hidden = false;
+      payloadNote.textContent =
+        "Why 0 bytes? For x-queue-type: stream, the management API still returns message counts, but typically omits message_bytes. Use Segments and message counts as backlog signals; queue RAM is Erlang process memory, not total PDF payload size.";
+    }
+
+    const details = data.consumer_details || [];
+    if (consWrap && consTbody) {
+      consTbody.replaceChildren();
+      if (details.length > 0) {
+        consWrap.hidden = false;
+        for (const c of details) {
+          const tr = document.createElement("tr");
+          tr.appendChild(cellText(c.consumer_tag));
+          tr.appendChild(cellText(c.channel_details));
+          consTbody.appendChild(tr);
+        }
+      }
+    }
+  } catch (e) {
+    loading.hidden = true;
+    grid.hidden = false;
+    const card = document.createElement("div");
+    card.className = "metric-card metric-card--wide";
+    const p = document.createElement("p");
+    p.className = "metric-card__value";
+    p.textContent = e instanceof Error ? e.message : "Failed to load stream metrics.";
+    card.appendChild(p);
+    grid.appendChild(card);
+    if (errEl) {
+      errEl.textContent = e instanceof Error ? e.message : String(e);
+      errEl.hidden = false;
+    }
+  }
+}
+
+function wireStreamSection() {
+  const refreshBtn = document.getElementById("refresh-stream-metrics");
+  if (refreshBtn) refreshBtn.addEventListener("click", () => loadStreamMetrics());
+
+  const form = document.getElementById("stream-clear-form");
+  const result = document.getElementById("stream-clear-result");
+  if (form) {
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      if (result) {
+        result.hidden = true;
+        result.textContent = "";
+      }
+      const input = document.getElementById("stream-clear-secret");
+      const secret = input?.value ?? "";
+      try {
+        const res = await fetch("/api/stream/clear", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ secret }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const d = data.detail;
+          throw new Error(typeof d === "string" ? d : res.statusText);
+        }
+        if (result) {
+          result.hidden = false;
+          result.textContent = data.detail || "Done.";
+        }
+        if (input) input.value = "";
+        await loadStreamMetrics();
+      } catch (e) {
+        if (result) {
+          result.hidden = false;
+          result.textContent = e instanceof Error ? e.message : String(e);
+        }
+      }
+    });
+  }
 }
 
 function wireRefresh() {
@@ -610,12 +857,13 @@ function wireSearch() {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   wireStepFocus();
   wireThemeToggle();
   wireRefresh();
+  wireStreamSection();
   wireSearch();
-  loadConfig();
+  await loadConfig();
   setSilverMartTitles("dbt_analytics");
-  loadAllData();
+  await loadAllData();
 });

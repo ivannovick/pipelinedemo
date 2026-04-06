@@ -4,7 +4,7 @@
 #   1) airflow DAG gdrive_publish_to_stream — reads Drive, publishes JSON jobs to RabbitMQ Stream only.
 #   2) airflow DAG pdf_stream_batch_consumer — every minute, consumes stream batch → ./data/pdfs + Postgres.
 #   postgres — app DB; rabbitmq — broker + streams (5552).
-#   workflow-viz — Clarity UI + FastAPI: pipeline diagram, pdf_documents table, full-text pages.
+#   workflow-viz — Clarity UI + FastAPI: pipeline, DAG links, RabbitMQ stream metrics, Bronze/Silver, search.
 #   dbt — installed in the Airflow image; project at ./dbt/pdf_archive mounted read-only.
 
 services:
@@ -94,12 +94,23 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pdfuser}:${POSTGRES_PASSWORD:-pdfpass}@postgres:5432/${POSTGRES_DB:-pdfarchive}
       DBT_SCHEMA: ${DBT_SCHEMA:-dbt_analytics}
-      WORKFLOW_VIZ_DAG_SOURCE_BASE: ${WORKFLOW_VIZ_DAG_SOURCE_BASE:-}
+      # Per-file links: use .../blob/main/dags (not tree/...) so "Open" hits the file page
+      WORKFLOW_VIZ_DAG_SOURCE_BASE: ${WORKFLOW_VIZ_DAG_SOURCE_BASE:-https://github.com/ivannovick/pipelinedemo/blob/main/dags}
       WORKFLOW_VIZ_AIRFLOW_UI_URL: ${WORKFLOW_VIZ_AIRFLOW_UI_URL:-}
+      # RabbitMQ management (internal); metrics + optional stream reset
+      RABBITMQ_MANAGEMENT_URL: http://rabbitmq:15672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+      STREAM_NAME: ${STREAM_NAME:-pdf.jobs}
+      WORKFLOW_VIZ_RABBITMQ_UI_URL: ${WORKFLOW_VIZ_RABBITMQ_UI_URL:-http://localhost:15672}
+      WORKFLOW_VIZ_STREAM_RESET_SECRET: ${WORKFLOW_VIZ_STREAM_RESET_SECRET:-}
     ports:
       - "${WORKFLOW_VIZ_PORT:-3456}:80"
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     healthcheck:
       test:

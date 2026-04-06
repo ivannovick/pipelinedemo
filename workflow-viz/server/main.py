@@ -4,7 +4,12 @@ Serve Clarity static UI + Postgres-backed API for pdf_documents listing and full
 
 from __future__ import annotations
 
+import base64
+import json
 import os
+import urllib.error
+import urllib.parse
+import urllib.request
 from decimal import Decimal
 from html import escape
 from pathlib import Path
@@ -13,6 +18,7 @@ from uuid import UUID
 
 import psycopg
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg import errors as pg_errors
@@ -21,6 +27,9 @@ from psycopg import sql
 DATABASE_URL = os.environ["DATABASE_URL"]
 DBT_SCHEMA = os.environ.get("DBT_SCHEMA", "dbt_analytics")
 STATIC_DIR = Path(os.environ.get("STATIC_ROOT", "/app/static")).resolve()
+
+# When WORKFLOW_VIZ_DAG_SOURCE_BASE is unset (e.g. local uvicorn), still offer GitHub file links.
+_DEFAULT_DAG_SOURCE_BASE = "https://github.com/ivannovick/pipelinedemo/blob/main/dags"
 
 SILVER_MARTS: tuple[tuple[str, str], ...] = (
     ("stg_pdf_documents", "id"),
@@ -31,7 +40,169 @@ SILVER_MARTS: tuple[tuple[str, str], ...] = (
 BRONZE_SCHEMA = "public"
 BRONZE_TABLE = "pdf_documents"
 
+RABBITMQ_MANAGEMENT_URL = os.environ.get("RABBITMQ_MANAGEMENT_URL", "http://rabbitmq:15672").rstrip("/")
+RABBITMQ_API_USER = os.environ.get("RABBITMQ_USER", "guest")
+RABBITMQ_API_PASS = os.environ.get("RABBITMQ_PASS", "guest")
+RABBITMQ_VHOST = os.environ.get("RABBITMQ_VHOST", "/")
+STREAM_QUEUE_NAME = os.environ.get("STREAM_NAME", "pdf.jobs")
+STREAM_RESET_SECRET = os.environ.get("WORKFLOW_VIZ_STREAM_RESET_SECRET", "").strip()
+
 app = FastAPI(title="workflow-viz", docs=False, redoc_url=None)
+
+
+def _rabbitmq_mgmt_request(
+    method: str,
+    path: str,
+    *,
+    data: dict[str, Any] | None = None,
+    timeout: float = 15.0,
+) -> tuple[int, bytes]:
+    """HTTP call to RabbitMQ management plugin (path starts with /api/)."""
+    url = f"{RABBITMQ_MANAGEMENT_URL}{path}"
+    payload = json.dumps(data).encode("utf-8") if data is not None else None
+    req = urllib.request.Request(url, data=payload, method=method.upper())
+    tok = base64.b64encode(f"{RABBITMQ_API_USER}:{RABBITMQ_API_PASS}".encode()).decode("ascii")
+    req.add_header("Authorization", f"Basic {tok}")
+    if payload is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.getcode() or 200, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def _queue_api_path() -> str:
+    v = urllib.parse.quote(RABBITMQ_VHOST, safe="")
+    q = urllib.parse.quote(STREAM_QUEUE_NAME, safe="")
+    return f"/api/queues/{v}/{q}"
+
+
+@app.get("/api/stream/metrics")
+def stream_metrics() -> dict[str, Any]:
+    """
+    Stream queue stats from RabbitMQ management API (messages, bytes, consumers).
+    """
+    path = _queue_api_path()
+    code, body = _rabbitmq_mgmt_request("GET", path)
+    base: dict[str, Any] = {
+        "ok": code == 200,
+        "stream_name": STREAM_QUEUE_NAME,
+        "vhost": RABBITMQ_VHOST,
+        "management_base": RABBITMQ_MANAGEMENT_URL,
+        "exists": False,
+        "error": None,
+    }
+    if code == 404:
+        base["exists"] = False
+        base["queue_name"] = STREAM_QUEUE_NAME
+        base["vhost"] = RABBITMQ_VHOST
+        base["messages"] = 0
+        base["messages_ready"] = 0
+        base["message_bytes"] = 0
+        base["memory_bytes"] = None
+        base["segments"] = None
+        base["payload_bytes_in_api"] = False
+        base["stream_payload_bytes_not_in_management_api"] = False
+        base["consumers"] = 0
+        base["state"] = None
+        base["queue_type"] = None
+        base["consumer_details"] = []
+        return base
+    if code != 200:
+        err_txt = body.decode("utf-8", errors="replace")[:500]
+        base["ok"] = False
+        base["error"] = f"RabbitMQ management HTTP {code}: {err_txt}"
+        return base
+    try:
+        qj = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        base["ok"] = False
+        base["error"] = f"Invalid JSON from management API: {exc}"
+        return base
+    args = qj.get("arguments") or {}
+    qtype = args.get("x-queue-type") or qj.get("type")
+    consumers = qj.get("consumers")
+    consumer_details = qj.get("consumer_details") or []
+    messages = int(qj.get("messages") or 0)
+    messages_ready = int(qj.get("messages_ready") or messages)
+    # Stream queues often omit message_*_bytes in GET /api/queues (only classic queues fill them).
+    mb_raw = qj.get("message_bytes")
+    mbr_raw = qj.get("message_bytes_ready")
+    message_bytes = int(mb_raw) if mb_raw is not None else 0
+    if message_bytes == 0 and mbr_raw is not None:
+        message_bytes = int(mbr_raw)
+    payload_bytes_reported = mb_raw is not None or mbr_raw is not None
+    memory = qj.get("memory")
+    memory_bytes = int(memory) if memory is not None else None
+    segments = qj.get("segments")
+    segments_int = int(segments) if segments is not None else None
+    qname = qj.get("name") or STREAM_QUEUE_NAME
+    vhost_name = qj.get("vhost") or RABBITMQ_VHOST
+    stream_limitation = (qtype == "stream" or args.get("x-queue-type") == "stream") and not payload_bytes_reported
+    base.update(
+        {
+            "exists": True,
+            "queue_name": qname,
+            "vhost": vhost_name,
+            "messages": messages,
+            "messages_ready": messages_ready,
+            "messages_unacked": int(qj.get("messages_unacknowledged") or 0),
+            "message_bytes": message_bytes,
+            "message_bytes_ready": int(qj.get("message_bytes_ready") or 0)
+            if qj.get("message_bytes_ready") is not None
+            else 0,
+            "message_bytes_unacked": int(qj.get("message_bytes_unacknowledged") or 0)
+            if qj.get("message_bytes_unacknowledged") is not None
+            else 0,
+            "payload_bytes_in_api": payload_bytes_reported,
+            "memory_bytes": memory_bytes,
+            "segments": segments_int,
+            "consumers": int(consumers) if consumers is not None else len(consumer_details),
+            "state": qj.get("state"),
+            "queue_type": qtype,
+            "durable": qj.get("durable"),
+            "stream_payload_bytes_not_in_management_api": stream_limitation,
+            "consumer_details": [
+                {
+                    "consumer_tag": c.get("consumer_tag"),
+                    "channel_details": (c.get("channel_details") or {}).get("name"),
+                }
+                for c in consumer_details[:20]
+            ],
+        }
+    )
+    return base
+
+
+class StreamClearBody(BaseModel):
+    secret: str = Field(default="", max_length=256)
+
+
+@app.post("/api/stream/clear")
+def stream_clear(body: StreamClearBody) -> dict[str, Any]:
+    """
+    DELETE the stream queue (all retained messages). Next publisher run recreates it.
+    Requires WORKFLOW_VIZ_STREAM_RESET_SECRET and matching JSON body {"secret": "..."}.
+    """
+    if not STREAM_RESET_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="Stream reset disabled: set WORKFLOW_VIZ_STREAM_RESET_SECRET in the workflow-viz service.",
+        )
+    if body.secret != STREAM_RESET_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret.")
+
+    path = _queue_api_path()
+    code, resp_body = _rabbitmq_mgmt_request("DELETE", path)
+    if code in (204, 404):
+        return {
+            "ok": True,
+            "deleted": code == 204,
+            "detail": "Stream queue deleted." if code == 204 else "Queue did not exist (already empty or never created).",
+        }
+    err_txt = resp_body.decode("utf-8", errors="replace")[:500]
+    raise HTTPException(status_code=502, detail=f"RabbitMQ management HTTP {code}: {err_txt}")
 
 # Full bronze row shape; cap extracted_text size for the list endpoint (full text via /text/{id}).
 LIST_SQL = """
@@ -161,11 +332,20 @@ def list_silver_marts() -> dict:
 
 
 @app.get("/api/config")
-def api_config() -> dict[str, str]:
-    """UI links: set WORKFLOW_VIZ_DAG_SOURCE_BASE to GitHub blob URL prefix (no trailing slash)."""
+def api_config() -> dict[str, Any]:
+    """UI links: WORKFLOW_VIZ_DAG_SOURCE_BASE = GitHub .../blob/<branch>/dags (no trailing slash)."""
+    raw = os.environ.get("WORKFLOW_VIZ_DAG_SOURCE_BASE")
+    if raw is None or not str(raw).strip():
+        dag_base = _DEFAULT_DAG_SOURCE_BASE
+    else:
+        dag_base = str(raw).strip()
     return {
-        "dag_source_base": os.environ.get("WORKFLOW_VIZ_DAG_SOURCE_BASE", "").rstrip("/"),
+        "dag_source_base": dag_base.rstrip("/"),
         "airflow_ui_url": os.environ.get("WORKFLOW_VIZ_AIRFLOW_UI_URL", "").rstrip("/"),
+        "rabbitmq_ui_url": os.environ.get("WORKFLOW_VIZ_RABBITMQ_UI_URL", "").rstrip("/"),
+        "stream_clear_enabled": bool(STREAM_RESET_SECRET),
+        "stream_name": STREAM_QUEUE_NAME,
+        "rabbitmq_vhost": RABBITMQ_VHOST,
     }
 
 
