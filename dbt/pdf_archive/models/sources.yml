@@ -1,0 +1,14 @@
+version: 2
+
+sources:
+  - name: pipeline
+    description: Raw rows written by the Airflow stream consumer (public.pdf_documents).
+    database: "{{ target.database }}"
+    schema: public
+    tables:
+      - name: pdf_documents
+        identifier: pdf_documents
+        columns:
+          - name: id
+          - name: original_file_name
+          - name: extracted_text

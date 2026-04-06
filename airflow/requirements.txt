@@ -2,3 +2,4 @@ dlt==1.17.1
 rstream==1.0.0
 pypdf==5.1.0
 psycopg[binary]==3.2.4
+dbt-postgres>=1.8.0,<1.10.0

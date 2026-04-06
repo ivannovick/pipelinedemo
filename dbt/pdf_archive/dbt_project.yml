@@ -1,0 +1,19 @@
+name: pdf_archive
+version: "1.0.0"
+config-version: 2
+
+profile: pdf_archive
+
+model-paths: [models]
+analysis-paths: [analyses]
+test-paths: [tests]
+seed-paths: [seeds]
+macro-paths: [macros]
+
+models:
+  pdf_archive:
+    +materialized: view
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

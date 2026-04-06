@@ -10,6 +10,12 @@ Architecture (stream-first)
 
 3) Postgres holds extracted_text plus source_stream + stream_offset (idempotency) and paths to files.
 
+4) Airflow DAG `dbt_run_pdf_archive` (transform only, not tied to RMQ): dbt-postgres in the Airflow
+   image; project at dbt/pdf_archive → /opt/dbt/pdf_archive. Runs `dbt run` on its own schedule
+   (default every 60 minutes; DBT_RUN_SCHEDULE_MINUTES in .env). Builds dbt_analytics models
+   (stg_pdf_documents, pdf_documents_enriched, pdf_documents_fts + GIN). Manual run:
+     docker compose exec airflow bash -lc "mkdir -p /tmp/dbt-target /tmp/dbt-logs && cd /opt/dbt/pdf_archive && dbt run --project-dir /opt/dbt/pdf_archive --profiles-dir /opt/dbt/pdf_archive --target-path /tmp/dbt-target --log-path /tmp/dbt-logs"
+
 Postgres column for your PC archive path
 ----------------------------------------
 - local_pc_archive_path (NOT NULL): where the PDF file lives relative to your project, or an absolute path.
@@ -18,7 +24,7 @@ Postgres column for your PC archive path
 
 Startup / latency
 -----------------
-- Three containers: postgres, rabbitmq, airflow.
+- Four containers: postgres, rabbitmq, airflow, workflow-viz (optional diagram UI).
 - Ingest from Drive can run anytime; PDFs are usually processed within about one schedule interval
   (default 1 minute) plus STREAM_BATCH_POLL_SECONDS per batch run. Tune STREAM_BATCH_POLL_SECONDS
   and STREAM_BATCH_MAX_MESSAGES in .env if runs overlap or time out.
@@ -30,10 +36,12 @@ Volumes
 - ./data/pdfs: PDF binaries written by the batch consumer (bind mount into Airflow).
 - postgres-data: Postgres data.
 - ./tools, ./testdata: read-only into Airflow for local publish helper (see TESTING.txt).
+- ./dbt/pdf_archive: read-only into Airflow for dbt (used by pdf_stream_batch_consumer).
 
 Services (containers)
 ---------------------
-- postgres, rabbitmq, airflow.
+- postgres, rabbitmq, airflow (includes dbt CLI for the dbt DAG), workflow-viz (Clarity UI;
+  default http://localhost:3456).
 
 List PDFs from your Google account (local PC)
 ----------------------------------------------
@@ -49,7 +57,8 @@ Setup
 3. If you already initialized Postgres with an older schema, remove the postgres-data volume,
    or run postgres/migrations/001_local_pc_archive_path.sql, or recreate the table from 01-schema.sql.
 4. docker compose up --build
-5. Enable DAGs `pdf_stream_batch_consumer` (scheduled) and `gdrive_publish_to_stream` (manual/scheduled).
+5. Enable DAGs `pdf_stream_batch_consumer` (stream → Postgres), `dbt_run_pdf_archive` (dbt transforms),
+   and `gdrive_publish_to_stream` (Drive → stream). Rebuild airflow after pulling: docker compose build airflow.
 
 Message format (stream body)
 ----------------------------

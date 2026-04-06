@@ -1,0 +1,343 @@
+/* workflow-viz: long scroll page, labeled sections, vertical pipeline (avoids overlap) */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.page {
+  min-height: 100vh;
+  padding: var(--cds-global-layout-space-xl) var(--cds-global-layout-space-lg);
+  max-width: min(960px, 100%);
+  margin: 0 auto;
+}
+
+/* ---- Labeled sections (clear boundaries) ---- */
+.page-section {
+  position: relative;
+  margin-bottom: var(--cds-global-layout-space-xl);
+  padding: var(--cds-global-layout-space-lg);
+  border: 1px solid var(--cds-alias-object-border-color);
+  border-radius: var(--cds-alias-object-border-radius-100);
+  background: var(--cds-alias-object-container-background-tint);
+}
+
+.page-section--header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--cds-global-layout-space-md);
+  margin-bottom: var(--cds-global-layout-space-lg);
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.page-section-intro {
+  flex: 1 1 12rem;
+}
+
+.page-section-header {
+  margin-bottom: var(--cds-global-layout-space-lg);
+  padding-bottom: var(--cds-global-layout-space-md);
+  border-bottom: 1px solid var(--cds-alias-object-border-color);
+}
+
+.page-section-kicker {
+  margin: 0 0 var(--cds-global-layout-space-xxs);
+  font-size: var(--cds-global-typography-caption-font-size);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--cds-global-typography-color-400);
+}
+
+.page-section-title {
+  margin: 0 0 var(--cds-global-layout-space-sm);
+  font-size: var(--cds-global-typography-font-size-4);
+}
+
+.page-section-desc {
+  margin: 0;
+  max-width: 42rem;
+  font-size: var(--cds-global-typography-secondary-font-size);
+  line-height: 1.5;
+}
+
+.page-section-actions {
+  margin-bottom: var(--cds-global-layout-space-md);
+}
+
+.page-subsection {
+  margin-top: var(--cds-global-layout-space-xl);
+  padding-top: var(--cds-global-layout-space-md);
+  border-top: 1px dashed var(--cds-alias-object-border-color);
+}
+
+.page-subsection:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.page-section--footer {
+  margin-top: var(--cds-global-layout-space-xxl);
+  margin-bottom: 0;
+  padding: var(--cds-global-layout-space-md) 0;
+  border: none;
+  border-top: 1px solid var(--cds-alias-object-border-color);
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--cds-global-typography-caption-font-size);
+}
+
+.section-rule {
+  display: block;
+  height: 0;
+  margin: var(--cds-global-layout-space-xl) 0;
+  padding: 0;
+  border: none;
+  border-top: 2px solid var(--cds-alias-object-border-color);
+}
+
+/* ---- Pipeline: vertical stack (no horizontal flex overlap) ---- */
+.pipeline-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-global-layout-space-xl);
+}
+
+.pipeline-tier {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--cds-global-layout-space-sm);
+}
+
+.pipeline-tier-label {
+  margin: 0 0 var(--cds-global-layout-space-sm);
+  font-size: var(--cds-global-typography-font-size-2);
+  font-weight: 600;
+  text-align: center;
+  color: var(--cds-global-typography-color-500);
+}
+
+.pipeline-arrow {
+  margin: 0;
+  text-align: center;
+  font-size: 1.35rem;
+  line-height: 1.2;
+  color: var(--cds-global-typography-color-300);
+  user-select: none;
+}
+
+.step-wrap {
+  width: 100%;
+  max-width: 36rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.step-wrap--pair {
+  max-width: 42rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-global-layout-space-md);
+}
+
+@media (min-width: 640px) {
+  .step-wrap--pair {
+    flex-direction: row;
+    align-items: stretch;
+  }
+
+  .step-wrap--pair > .step-card {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+
+/* Web component hosts: block layout so content never stacks at 0 height */
+cds-card {
+  display: block;
+  width: 100%;
+}
+
+cds-card.step-card {
+  contain: layout style;
+}
+
+.step-card-inner {
+  padding: var(--cds-global-layout-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-global-layout-space-sm);
+}
+
+.step-card {
+  cursor: default;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.step-card[data-active="true"] {
+  box-shadow: 0 0 0 2px var(--cds-alias-object-interaction-info-selected);
+  transform: translateY(-2px);
+}
+
+.step-card h4 {
+  margin: 0;
+  font-size: var(--cds-global-typography-font-size-3);
+}
+
+.step-card .meta {
+  margin: 0;
+}
+
+.step-card ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: var(--cds-global-typography-secondary-font-size);
+  color: var(--cds-global-typography-color-400);
+}
+
+.step-card li {
+  margin-bottom: 0.25rem;
+}
+
+/* ---- Tables ---- */
+.table-scroll {
+  overflow-x: auto;
+  margin-top: var(--cds-global-layout-space-sm);
+  border: 1px solid var(--cds-alias-object-border-color);
+  border-radius: var(--cds-alias-object-border-radius-100);
+  background: var(--cds-alias-object-container-background);
+}
+
+.doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--cds-global-typography-secondary-font-size);
+}
+
+.doc-table th,
+.doc-table td {
+  padding: var(--cds-global-layout-space-sm) var(--cds-global-layout-space-md);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--cds-alias-object-border-color);
+}
+
+.doc-table th {
+  font-weight: 600;
+  color: var(--cds-global-typography-color-500);
+  background: var(--cds-alias-object-container-background-tint);
+  white-space: nowrap;
+}
+
+.doc-table tr:last-child td {
+  border-bottom: none;
+}
+
+.doc-table-placeholder {
+  color: var(--cds-global-typography-color-400);
+  font-style: italic;
+}
+
+.subsection-title {
+  margin: var(--cds-global-layout-space-lg) 0 var(--cds-global-layout-space-sm);
+  font-size: var(--cds-global-typography-font-size-3);
+}
+
+.dag-hint {
+  margin: 0 0 var(--cds-global-layout-space-sm);
+  max-width: 48rem;
+}
+
+.dag-table td code {
+  font-size: var(--cds-global-typography-caption-font-size);
+}
+
+.silver-mart-title {
+  margin: 0 0 var(--cds-global-layout-space-sm);
+  font-size: var(--cds-global-typography-font-size-2);
+}
+
+.mart-kind {
+  font-weight: 400;
+  font-size: var(--cds-global-typography-caption-font-size);
+  color: var(--cds-global-typography-color-400);
+}
+
+.mart-error {
+  color: var(--cds-alias-status-danger);
+  font-size: var(--cds-global-typography-secondary-font-size);
+  margin: 0 0 var(--cds-global-layout-space-sm);
+}
+
+.docs-error {
+  color: var(--cds-alias-status-danger);
+  font-size: var(--cds-global-typography-secondary-font-size);
+  margin: 0 0 var(--cds-global-layout-space-sm);
+}
+
+.medallion-sub {
+  margin: 0;
+  font-size: var(--cds-global-typography-secondary-font-size);
+  line-height: 1.5;
+}
+
+.subtitle {
+  color: var(--cds-global-typography-color-400);
+  font-size: var(--cds-global-typography-secondary-font-size);
+  font-weight: 400;
+  margin: var(--cds-global-layout-space-xxs) 0 0;
+}
+
+.search-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--cds-global-layout-space-md);
+  margin-bottom: var(--cds-global-layout-space-md);
+}
+
+.search-field {
+  flex: 1 1 240px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-global-layout-space-xxs);
+}
+
+.search-field label {
+  font-size: var(--cds-global-typography-caption-font-size);
+  color: var(--cds-global-typography-color-500);
+}
+
+.search-field input[type="search"] {
+  font-family: inherit;
+  font-size: var(--cds-global-typography-font-size-2);
+  padding: var(--cds-global-layout-space-xs) var(--cds-global-layout-space-sm);
+  border: 1px solid var(--cds-alias-object-border-color);
+  border-radius: var(--cds-alias-object-border-radius-100);
+  background: var(--cds-alias-object-container-background);
+  color: inherit;
+  min-width: 12rem;
+  width: 100%;
+}
+
+.search-meta {
+  margin: 0 0 var(--cds-global-layout-space-sm);
+}
+
+.search-snippet {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 36rem;
+  font-size: var(--cds-global-typography-caption-font-size);
+}
+
+.page-footer a {
+  color: var(--cds-global-typography-link-color, var(--cds-alias-object-interaction-info-hover));
+}

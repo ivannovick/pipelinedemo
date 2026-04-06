@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en" cds-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pipeline workflow — PDF archive</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/@cds/core@6.9.2/global.min.css"
+      crossorigin="anonymous"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/@cds/city@1.1.0/css/bundles/default.min.css"
+      crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module">
+      import "https://unpkg.com/@cds/core@6.9.2/card/register.js";
+      import "https://unpkg.com/@cds/core@6.9.2/badge/register.js";
+      import "https://unpkg.com/@cds/core@6.9.2/divider/register.js";
+      import "https://unpkg.com/@cds/core@6.9.2/button/register.js";
+    </script>
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body cds-text="body">
+    <div class="page">
+      <header class="page-section page-section--header toolbar" aria-label="Page title">
+        <div class="page-section-intro">
+          <h1 cds-text="display">PDF ingestion pipeline</h1>
+          <p class="subtitle">
+            Google Drive → Airflow → RabbitMQ Streams → Postgres &amp; disk
+          </p>
+        </div>
+        <cds-button id="theme-toggle" action="outline">Dark mode</cds-button>
+      </header>
+
+      <!-- Section 1: Pipeline (vertical stack — scroll) -->
+      <section
+        class="page-section"
+        id="section-pipeline"
+        aria-labelledby="heading-pipeline"
+      >
+        <header class="page-section-header">
+          <p class="page-section-kicker">Section 1</p>
+          <h2 id="heading-pipeline" class="page-section-title" cds-text="section">
+            Pipeline flow
+          </h2>
+          <p class="page-section-desc" cds-text="secondary">
+            End-to-end path from Drive through the stream to Postgres and disk. Scroll down for
+            DAGs, data tables, and search.
+          </p>
+        </header>
+
+        <div class="pipeline-stack">
+          <p class="pipeline-tier-label">Ingest — publish jobs to RabbitMQ Stream</p>
+          <div class="pipeline-tier">
+            <div class="step-wrap">
+              <cds-card class="step-card" id="step-drive" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="info">Source</cds-badge>
+                  <h4>Google Drive</h4>
+                  <p class="meta" cds-text="secondary">
+                    Folder shared with service account; PDFs listed via dlt.
+                  </p>
+                </div>
+              </cds-card>
+            </div>
+            <p class="pipeline-arrow" aria-hidden="true">↓</p>
+            <div class="step-wrap">
+              <cds-card class="step-card" id="step-publish-dag" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="success">Airflow DAG</cds-badge>
+                  <h4>gdrive_publish_to_stream</h4>
+                  <p class="meta" cds-text="secondary">
+                    Trigger or schedule; orchestrates publish task only.
+                  </p>
+                </div>
+              </cds-card>
+            </div>
+            <p class="pipeline-arrow" aria-hidden="true">↓</p>
+            <div class="step-wrap">
+              <cds-card class="step-card" id="step-publisher-lib" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="neutral">Python module</cds-badge>
+                  <h4>gdrive_stream_publisher</h4>
+                  <p class="meta" cds-text="secondary">
+                    Read bytes, JSON envelope (<code>pdf_base64</code>, name, URL).
+                  </p>
+                  <ul>
+                    <li>No Postgres</li>
+                    <li>No text extraction</li>
+                  </ul>
+                </div>
+              </cds-card>
+            </div>
+            <p class="pipeline-arrow" aria-hidden="true">↓</p>
+            <div class="step-wrap">
+              <cds-card class="step-card" id="step-stream" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="warning">Broker</cds-badge>
+                  <h4>RabbitMQ Stream</h4>
+                  <p class="meta" cds-text="secondary">
+                    Durable log; port <strong>5552</strong>; stream
+                    <code>pdf.jobs</code> (configurable).
+                  </p>
+                </div>
+              </cds-card>
+            </div>
+          </div>
+
+          <p class="pipeline-tier-label">Consume — batch read stream, write Bronze + files</p>
+          <div class="pipeline-tier">
+            <div class="step-wrap">
+              <cds-card class="step-card" id="step-consumer-dag" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="success">Airflow DAG</cds-badge>
+                  <h4>pdf_stream_batch_consumer</h4>
+                  <p class="meta" cds-text="secondary">
+                    Scheduled batch poll; subscriber name + <code>store_offset</code>.
+                  </p>
+                </div>
+              </cds-card>
+            </div>
+            <p class="pipeline-arrow" aria-hidden="true">↓</p>
+            <div class="step-wrap">
+              <cds-card class="step-card" id="step-processing-lib" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="neutral">Python module</cds-badge>
+                  <h4>pdf_stream_processing</h4>
+                  <p class="meta" cds-text="secondary">
+                    Decode → pypdf → sanitize → write file → INSERT.
+                  </p>
+                  <ul>
+                    <li>Idempotent on (stream, offset)</li>
+                    <li>NUL bytes stripped for Postgres</li>
+                  </ul>
+                </div>
+              </cds-card>
+            </div>
+            <p class="pipeline-arrow" aria-hidden="true">↓</p>
+            <div class="step-wrap step-wrap--pair">
+              <cds-card class="step-card" id="step-postgres" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="info">Sink</cds-badge>
+                  <h4>PostgreSQL</h4>
+                  <p class="meta" cds-text="secondary">
+                    <code>public.pdf_documents</code> — text, paths, stream metadata.
+                  </p>
+                </div>
+              </cds-card>
+              <cds-card class="step-card" id="step-disk" tabindex="0">
+                <div class="step-card-inner">
+                  <cds-badge status="info">Sink</cds-badge>
+                  <h4>Volume</h4>
+                  <p class="meta" cds-text="secondary">
+                    <code>./data/pdfs</code> bind mount (hashed filenames).
+                  </p>
+                </div>
+              </cds-card>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <hr class="section-rule" />
+
+      <!-- Section 2: DAGs -->
+      <section class="page-section" id="section-dags" aria-labelledby="heading-dags">
+        <header class="page-section-header">
+          <p class="page-section-kicker">Section 2</p>
+          <h2 id="heading-dags" class="page-section-title" cds-text="section">
+            Airflow DAGs &amp; code
+          </h2>
+          <p class="page-section-desc" cds-text="secondary">
+            DAG entrypoints and helper modules under <code>dags/</code>. Use “Open” when
+            <code>WORKFLOW_VIZ_DAG_SOURCE_BASE</code> is configured.
+          </p>
+        </header>
+        <p id="dag-links-hint" class="dag-hint" cds-text="secondary" hidden></p>
+        <p id="airflow-ui-wrap" class="dag-hint" cds-text="secondary" hidden></p>
+        <h3 class="subsection-title" cds-text="subsection">DAGs</h3>
+        <div class="table-scroll">
+          <table class="doc-table dag-table">
+            <thead>
+              <tr>
+                <th>DAG id</th>
+                <th>Source file</th>
+                <th>Role</th>
+                <th>Open</th>
+              </tr>
+            </thead>
+            <tbody id="dag-tbody"></tbody>
+          </table>
+        </div>
+        <h3 class="subsection-title" cds-text="subsection">Supporting modules (<code>dags/</code>)</h3>
+        <div class="table-scroll">
+          <table class="doc-table dag-table">
+            <thead>
+              <tr>
+                <th>Module</th>
+                <th>Role</th>
+                <th>Open</th>
+              </tr>
+            </thead>
+            <tbody id="module-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <hr class="section-rule" />
+
+      <!-- Section 3: Bronze -->
+      <section
+        class="page-section page-section--bronze"
+        id="section-bronze"
+        aria-labelledby="heading-bronze"
+      >
+        <header class="page-section-header">
+          <p class="page-section-kicker">Section 3 — Bronze</p>
+          <h2 id="heading-bronze" class="page-section-title" cds-text="section">
+            Original landing table
+          </h2>
+          <p id="bronze-schema-hint" class="page-section-desc medallion-sub" cds-text="secondary">
+            <code>public.pdf_documents</code> — written by the stream consumer (all columns; long
+            <code>extracted_text</code> is capped in this grid).
+          </p>
+        </header>
+        <div class="page-section-actions">
+          <cds-button id="refresh-data" action="outline">Refresh tables</cds-button>
+        </div>
+        <p id="docs-error" class="docs-error" role="alert" hidden></p>
+        <div class="table-scroll">
+          <table class="doc-table">
+            <thead id="bronze-thead"></thead>
+            <tbody id="docs-tbody">
+              <tr>
+                <td class="doc-table-placeholder">Loading…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <hr class="section-rule" />
+
+      <!-- Section 4: Silver -->
+      <section
+        class="page-section page-section--silver"
+        id="section-silver"
+        aria-labelledby="heading-silver"
+      >
+        <header class="page-section-header">
+          <p class="page-section-kicker">Section 4 — Silver</p>
+          <h2 id="heading-silver" class="page-section-title" cds-text="section">
+            dbt-transformed tables &amp; views
+          </h2>
+          <p id="silver-schema-hint" class="page-section-desc medallion-sub" cds-text="secondary">
+            Schema <code>dbt_analytics</code> — models derived from
+            <code>public.pdf_documents</code>; build with DAG <code>dbt_run_pdf_archive</code>.
+          </p>
+        </header>
+        <p id="silver-global-error" class="docs-error" role="alert" hidden></p>
+
+        <article class="silver-mart page-subsection">
+          <h3 class="silver-mart-title" cds-text="subsection" id="silver-title-stg"></h3>
+          <p id="silver-error-stg" class="mart-error" role="alert" hidden></p>
+          <div class="table-scroll">
+            <table class="doc-table">
+              <thead id="silver-thead-stg"></thead>
+              <tbody id="silver-tbody-stg"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="silver-mart page-subsection">
+          <h3 class="silver-mart-title" cds-text="subsection" id="silver-title-enriched"></h3>
+          <p id="silver-error-enriched" class="mart-error" role="alert" hidden></p>
+          <div class="table-scroll">
+            <table class="doc-table">
+              <thead id="silver-thead-enriched"></thead>
+              <tbody id="silver-tbody-enriched"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="silver-mart page-subsection">
+          <h3 class="silver-mart-title" cds-text="subsection" id="silver-title-fts"></h3>
+          <p id="silver-error-fts" class="mart-error" role="alert" hidden></p>
+          <div class="table-scroll">
+            <table class="doc-table">
+              <thead id="silver-thead-fts"></thead>
+              <tbody id="silver-tbody-fts"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <hr class="section-rule" />
+
+      <!-- Section 5: Search -->
+      <section class="page-section" id="section-search" aria-labelledby="heading-search">
+        <header class="page-section-header">
+          <p class="page-section-kicker">Section 5</p>
+          <h2 id="heading-search" class="page-section-title" cds-text="section">Search</h2>
+          <p class="page-section-desc search-help" cds-text="secondary">
+            Uses Postgres full-text search when the <code>pdf_documents_fts</code> mart exists;
+            otherwise matches substrings in filename or <code>extracted_text</code>.
+          </p>
+        </header>
+        <form id="search-form" class="search-form">
+          <div class="search-field">
+            <label for="search-query">Query</label>
+            <input
+              type="search"
+              id="search-query"
+              name="q"
+              placeholder="e.g. revenue, risk factors…"
+              autocomplete="off"
+            />
+          </div>
+          <cds-button type="submit" id="search-submit">Search</cds-button>
+        </form>
+        <p id="search-meta" class="search-meta" cds-text="secondary" hidden></p>
+        <p id="search-error" class="docs-error" role="alert" hidden></p>
+        <div class="table-scroll">
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>id</th>
+                <th>original_file_name</th>
+                <th>rank</th>
+                <th>snippet</th>
+                <th>full text</th>
+              </tr>
+            </thead>
+            <tbody id="search-tbody">
+              <tr>
+                <td colspan="5" class="doc-table-placeholder">Run a search above.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer class="page-footer page-section page-section--footer" cds-text="secondary">
+        <p>
+          <code>docker compose up workflow-viz</code> — default
+          <a href="http://localhost:3456/">http://localhost:3456</a>
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>

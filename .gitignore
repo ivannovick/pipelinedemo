@@ -40,6 +40,11 @@ airflow-sqlite/
 data/pdfs/*.pdf
 testdata/*.pdf
 
+# dbt (project under dbt/pdf_archive)
+dbt/**/target/
+dbt/**/logs/
+dbt/**/.user.yml
+
 # Python / tooling
 __pycache__/
 *.py[cod]

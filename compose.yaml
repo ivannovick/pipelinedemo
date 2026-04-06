@@ -4,6 +4,8 @@
 #   1) airflow DAG gdrive_publish_to_stream — reads Drive, publishes JSON jobs to RabbitMQ Stream only.
 #   2) airflow DAG pdf_stream_batch_consumer — every minute, consumes stream batch → ./data/pdfs + Postgres.
 #   postgres — app DB; rabbitmq — broker + streams (5552).
+#   workflow-viz — Clarity UI + FastAPI: pipeline diagram, pdf_documents table, full-text pages.
+#   dbt — installed in the Airflow image; project at ./dbt/pdf_archive mounted read-only.
 
 services:
   postgres:
@@ -61,6 +63,13 @@ services:
       STREAM_BATCH_POLL_SECONDS: ${STREAM_BATCH_POLL_SECONDS:-50}
       STREAM_BATCH_MAX_MESSAGES: ${STREAM_BATCH_MAX_MESSAGES:-200}
       DATABASE_URL: postgresql://${POSTGRES_USER:-pdfuser}:${POSTGRES_PASSWORD:-pdfpass}@postgres:5432/${POSTGRES_DB:-pdfarchive}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-pdfarchive}
+      POSTGRES_USER: ${POSTGRES_USER:-pdfuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pdfpass}
+      # dbt DAG schedule (minutes); separate role from stream consumer
+      DBT_RUN_SCHEDULE_MINUTES: ${DBT_RUN_SCHEDULE_MINUTES:-60}
       LOCAL_PDF_STORAGE: /data/pdfs
       PDF_HOST_BASE_DIR: ${PDF_HOST_BASE_DIR:-}
     ports:
@@ -72,11 +81,38 @@ services:
       - ./data/pdfs:/data/pdfs
       - ./tools:/opt/airflow/tools:ro
       - ./testdata:/opt/airflow/testdata:ro
+      - ./dbt/pdf_archive:/opt/dbt/pdf_archive:ro
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+
+  workflow-viz:
+    build: ./workflow-viz
+    hostname: workflow-viz
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-pdfuser}:${POSTGRES_PASSWORD:-pdfpass}@postgres:5432/${POSTGRES_DB:-pdfarchive}
+      DBT_SCHEMA: ${DBT_SCHEMA:-dbt_analytics}
+      WORKFLOW_VIZ_DAG_SOURCE_BASE: ${WORKFLOW_VIZ_DAG_SOURCE_BASE:-}
+      WORKFLOW_VIZ_AIRFLOW_UI_URL: ${WORKFLOW_VIZ_AIRFLOW_UI_URL:-}
+    ports:
+      - "${WORKFLOW_VIZ_PORT:-3456}:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1/api/pdf-documents')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   postgres-data:

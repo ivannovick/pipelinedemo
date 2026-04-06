@@ -21,7 +21,7 @@ from pdf_stream_processing import process_after_stream_read
 log = logging.getLogger(__name__)
 
 
-async def _consume_batch_async() -> int:
+async def _consume_batch_async() -> None:
     host = os.environ.get("STREAM_HOST", os.environ.get("RABBITMQ_HOST", "rabbitmq"))
     port = int(os.environ.get("STREAM_PORT", "5552"))
     user = os.environ["RABBITMQ_USER"]
@@ -130,7 +130,6 @@ async def _consume_batch_async() -> int:
 
     n = processed["count"]
     log.info("Batch consumer finished, processed %s message(s)", n)
-    return n
 
 
 def run_pdf_stream_batch() -> None:
